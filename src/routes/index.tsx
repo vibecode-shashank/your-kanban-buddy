@@ -17,6 +17,7 @@ import { Column } from "@/components/kanban/Column";
 import { TaskCard } from "@/components/kanban/TaskCard";
 import { TaskDialog } from "@/components/kanban/TaskDialog";
 import { AIChat } from "@/components/kanban/AIChat";
+import { CelebrationOverlay, celebrate } from "@/components/kanban/Celebration";
 import {
   fetchTasks,
   createTask,
@@ -137,17 +138,25 @@ function BoardPage() {
 
     setTasks(finalTasks);
 
+    // 🎉 Celebrate if a task crossed into Done
+    if (targetStatus === "done" && activeTask.status !== "done") {
+      celebrate();
+    }
+
     await Promise.all(updates.map((u) => updateTask(u.id, { status: u.status, position: u.position })));
   }
 
   async function handleSave(input: { title: string; description: string; status: TaskStatus }) {
     if (dialog.task) {
+      const wasNotDone = dialog.task.status !== "done";
       const updated = await updateTask(dialog.task.id, input);
       setTasks((ts) => ts.map((t) => (t.id === updated.id ? updated : t)));
+      if (input.status === "done" && wasNotDone) celebrate();
     } else {
       const maxPos = Math.max(0, ...grouped[input.status].map((t) => t.position));
       const created = await createTask({ ...input, position: maxPos + 1000 });
       setTasks((ts) => [...ts, created]);
+      if (input.status === "done") celebrate();
     }
     setDialog({ open: false, task: null, status: "todo" });
   }
@@ -245,6 +254,7 @@ function BoardPage() {
       />
 
       <AIChat tasks={tasks} onChange={reload} />
+      <CelebrationOverlay />
     </div>
   );
 }

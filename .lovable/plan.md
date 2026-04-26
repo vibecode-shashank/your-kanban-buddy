@@ -1,28 +1,50 @@
-## Diagnosis
+# Plan: Celebration, Voice, and Live Analytics
 
-I re-ran the build (`bun run build:dev`) and it now **completes successfully** (exit code 0, both client + SSR bundles emitted). The error you saw was stale — the previous build had failed transiently and the message you received was a generic "module externalized" warning, not a real failure on the current code.
+## 1. 🎉 Celebration effect when a task moves to Done
 
-There is, however, **one real (non-fatal) warning** in the build output worth fixing while we're here:
+- Install `canvas-confetti` (`bun add canvas-confetti @types/canvas-confetti`).
+- Create `src/components/kanban/Celebration.tsx`:
+  - Imperative helper `celebrate()` that fires a multi-burst confetti show: stars (`shapes: ['star']`), circles, and emoji-style "balloons" via two side-cannons + a center burst.
+  - Uses brand colors (amber, purple, sky, emerald, pink) to match the app palette.
+  - Also overlays a brief Framer Motion layer of floating balloon (🎈) and sparkle (✨) emojis (~1.5s) so it feels festive even if confetti is blocked.
+- Trigger points in `src/routes/index.tsx`:
+  - In `onDragEnd`: when `targetStatus === "done"` AND the task was not already in `done`, call `celebrate()`.
+  - In `handleSave`: if editing an existing task and status changes to `done`, call `celebrate()`.
+- Trigger from AI as well: in `AIChat.tsx`, after executing tool calls, if any `update_task` set `status: "done"` for a task that wasn't already done, call `celebrate()`.
 
-```
-@import rules must precede all rules aside from @charset and @layer statements
-   @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans...")
-```
+## 2. 🎤 Voice command in the AI chatbot
 
-In `src/styles.css`, the Google Fonts `@import` is on line 5 — **after** `@import "tailwindcss"` and `@import "tw-animate-css"`. CSS spec requires all `@import` statements to come first. Right now the Plus Jakarta Sans + Inter fonts may not load reliably in production because the browser ignores out-of-order `@import` rules.
+- Add a microphone button inside the chat input row in `src/components/kanban/AIChat.tsx`.
+- Use the browser's built-in **Web Speech API** (`window.SpeechRecognition || webkitSpeechRecognition`) — no extra deps, no API key.
+- Behavior:
+  - Click mic → start listening, button pulses red, show "Listening…" placeholder.
+  - Interim results stream into the input; on final result, auto-send the message.
+  - Click mic again (or press Esc) to stop.
+  - Graceful fallback: if API unavailable (e.g. Safari/Firefox without it), hide the button and show a small tooltip "Voice not supported in this browser" on hover of a disabled mic.
+- Wrap logic in a small `useSpeechRecognition` hook in `src/hooks/use-speech-recognition.ts` for clarity.
 
-## Plan
+## 3. 📊 Live Analytics page
 
-**1. Fix `src/styles.css` (single edit):**
-- Move the Google Fonts `@import url(...)` line to the very top of the file, above the Tailwind imports.
-- This silences the warning AND ensures the Plus Jakarta Sans typography (which is core to the Voostox-inspired design) actually loads.
+- Create new route `src/routes/analytics.tsx` (`/analytics`).
+- Update `Sidebar.tsx` to use TanStack `<Link>` so "Dashboard" → `/` and "Analytics" → `/analytics`, with `activeProps` for highlighting (replaces the hardcoded `active: true`).
+- Analytics page contents (live, reads from the same `tasks` table):
+  - **KPI cards** for each status showing **count** and **percentage** of total, with the column's accent color and dot.
+  - **Donut/Progress ring** showing the share of done vs in-progress vs todo.
+  - **Stacked horizontal progress bar** ("0% ────── 100%") visualizing completion.
+  - **Timeline chart** (line/area) using `recharts` (already installed via shadcn `chart.tsx`):
+    - X-axis: dates from the earliest task `created_at` to today (daily buckets, last 14 days by default with a 7d/14d/30d toggle).
+    - Three series: tasks **created**, tasks **completed** (status changed to done — approximated by `updated_at` of done tasks per day), and **active** (running total of not-done).
+- **Live updates**: subscribe to Postgres changes on `public.tasks` via Supabase Realtime so the page updates instantly when cards are moved on the board (or by the AI). Requires a small migration: `ALTER PUBLICATION supabase_realtime ADD TABLE public.tasks;` and `ALTER TABLE public.tasks REPLICA IDENTITY FULL;`.
+- Reuse existing design tokens (rounded-3xl surface, soft shadow, decorative blobs) for visual consistency with the board.
 
-**2. Re-run the build to confirm:**
-- Verify exit code 0 and zero CSS warnings.
+## 4. Files touched
 
-That's it — no other code changes needed. The Kanban board, AI chat, drag-and-drop, and database persistence are all working from the previous build.
+- **New**: `src/components/kanban/Celebration.tsx`, `src/hooks/use-speech-recognition.ts`, `src/routes/analytics.tsx`
+- **Edited**: `src/routes/index.tsx` (trigger celebration), `src/components/kanban/AIChat.tsx` (mic + celebration on AI done), `src/components/kanban/Sidebar.tsx` (real navigation links)
+- **Migration**: enable realtime for `tasks` table
+- **Dependencies**: `canvas-confetti`, `@types/canvas-confetti`
 
-## What I will NOT touch
-- `src/routes/index.tsx`, `AIChat.tsx`, `ai-chat.ts` — all building cleanly.
-- The DB schema or RLS — already in place.
-- Any component logic — no behavior changes requested.
+## 5. Out of scope (can do next)
+
+- Per-user analytics (needs auth)
+- Persisting a true status-change history (currently we infer "completed at" from `updated_at` of done tasks — accurate for typical flows, but a dedicated `task_events` table would be more precise; happy to add if you want).

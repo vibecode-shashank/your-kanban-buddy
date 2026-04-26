@@ -1,41 +1,42 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, X, Send, Loader2 } from "lucide-react";
+import { Sparkles, X, Send, Loader2, Mic, MicOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useServerFn } from "@tanstack/react-start";
 import { aiChat } from "@/server/ai-chat";
 import type { Task, TaskStatus } from "@/lib/tasks";
 import { createTask, updateTask, deleteTask } from "@/lib/tasks";
+import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
+import { celebrate } from "./Celebration";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
 export function AIChat({ tasks, onChange }: { tasks: Task[]; onChange: () => void }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>([
-    { role: "assistant", content: "Hey! I can create, move, update, or delete tasks for you. Just ask — e.g. *\"add a task to design the homepage\"* or *\"move 'fix login' to done\"*." },
+    { role: "assistant", content: "Hey! I can create, move, update, or delete tasks for you. Just type or tap the mic 🎤 — e.g. *\"add a task to design the homepage\"* or *\"move 'fix login' to done\"*." },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const chat = useServerFn(aiChat);
+  const tasksRef = useRef(tasks);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, loading]);
-
-  async function send() {
-    const text = input.trim();
-    if (!text || loading) return;
+  const sendText = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
     setInput("");
-    const next: Msg[] = [...messages, { role: "user", content: text }];
+    const next: Msg[] = [...messages, { role: "user", content: trimmed }];
     setMessages(next);
     setLoading(true);
 
     try {
+      const currentTasks = tasksRef.current;
       const res = await chat({
         data: {
           messages: next,
-          tasks: tasks.map((t) => ({ id: t.id, title: t.title, description: t.description, status: t.status })),
+          tasks: currentTasks.map((t) => ({ id: t.id, title: t.title, description: t.description, status: t.status })),
         },
       });
 
@@ -45,17 +46,21 @@ export function AIChat({ tasks, onChange }: { tasks: Task[]; onChange: () => voi
       }
 
       let executed = 0;
+      let movedToDone = false;
       for (const tc of (res as any).toolCalls ?? []) {
         try {
           if (tc.name === "create_task") {
-            await createTask({
+            const created = await createTask({
               title: tc.args.title,
               description: tc.args.description ?? "",
               status: tc.args.status as TaskStatus,
             });
+            if (created.status === "done") movedToDone = true;
           } else if (tc.name === "update_task") {
             const { id, ...patch } = tc.args;
+            const before = currentTasks.find((t) => t.id === id);
             await updateTask(id, patch);
+            if (patch.status === "done" && before && before.status !== "done") movedToDone = true;
           } else if (tc.name === "delete_task") {
             await deleteTask(tc.args.id);
           }
@@ -65,6 +70,7 @@ export function AIChat({ tasks, onChange }: { tasks: Task[]; onChange: () => voi
         }
       }
       if (executed > 0) onChange();
+      if (movedToDone) celebrate();
 
       const content = (res as any).content || (executed > 0 ? `Done — ${executed} change${executed > 1 ? "s" : ""} applied.` : "Hmm, I'm not sure how to help with that.");
       setMessages((m) => [...m, { role: "assistant", content }]);
@@ -74,6 +80,23 @@ export function AIChat({ tasks, onChange }: { tasks: Task[]; onChange: () => voi
     } finally {
       setLoading(false);
     }
+  }, [messages, loading, chat, onChange]);
+
+  const { listening, supported, start, stop } = useSpeechRecognition({
+    onInterim: (text) => setInput(text),
+    onFinal: (text) => {
+      setInput("");
+      sendText(text);
+    },
+  });
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, loading]);
+
+  function toggleMic() {
+    if (listening) stop();
+    else start();
   }
 
   return (
@@ -140,16 +163,30 @@ export function AIChat({ tasks, onChange }: { tasks: Task[]; onChange: () => voi
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                send();
+                sendText(input);
               }}
-              className="p-4 border-t border-border/50 flex gap-2"
+              className="p-4 border-t border-border/50 flex gap-2 items-center"
             >
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask me anything..."
-                className="flex-1 rounded-xl bg-surface-muted px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand/50"
+                placeholder={listening ? "Listening..." : "Ask me anything..."}
+                className={`flex-1 rounded-xl bg-surface-muted px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand/50 ${listening ? "ring-2 ring-red-400/60" : ""}`}
               />
+              <button
+                type="button"
+                onClick={toggleMic}
+                disabled={!supported}
+                title={supported ? (listening ? "Stop listening" : "Speak your command") : "Voice not supported in this browser"}
+                className={`h-11 w-11 rounded-xl flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  listening
+                    ? "bg-red-500 text-white animate-pulse"
+                    : "bg-surface-muted text-foreground hover:bg-foreground/10"
+                }`}
+                aria-label={listening ? "Stop listening" : "Start voice input"}
+              >
+                {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </button>
               <button
                 type="submit"
                 disabled={loading || !input.trim()}
