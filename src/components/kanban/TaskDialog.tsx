@@ -44,7 +44,7 @@ export function TaskDialog({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.96 }}
             transition={{ type: "spring", stiffness: 280, damping: 26 }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
             className="w-full max-w-lg rounded-3xl bg-surface p-7 shadow-[var(--shadow-soft)]"
           >
             <div className="flex items-center justify-between mb-5">
